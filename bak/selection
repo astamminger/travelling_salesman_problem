@@ -1,0 +1,659 @@
+program travelling_salesman
+
+  use datatypes
+
+  implicit none
+
+  character(len=2)    :: comment
+  integer             :: ierr, icity_num, i, j
+  real(idp)           :: fit, fit100
+
+  type(city_t)        :: city
+  type(collection_t)  :: col
+  type(population_t)  :: pool, modified_pool
+  
+  real(idp),  parameter  :: zero = 0.0d000
+  real(idp),  parameter  :: prec = 1.0d-013
+  real(idp),  parameter  :: pos_inf = huge(1.0d000)
+
+  !! Programm-Parameter
+  !!
+  !! Anzahl der verwendeten Individuen im "Gen-Pool"
+  integer,    parameter  :: num_individuals = 5000
+  !! Überlebenswahrscheinlichkeit schlechterer Individuen (ausser Mutation)
+  real(idp),  parameter  :: rsurv_prob = 0.0d-001 
+  !! Anzahl an Generationen (Iterationsschritte)
+  integer,    parameter  :: gen = 10000
+
+  !! Einlesen der Städe und ihrer Koordinaten. Dabei wird zunächst die Anzahl
+  !! der verwendeten Städte ermittelt und anschließend die Koordinaten
+  !! in die entsprechenden Arrays geschrieben
+  open(unit=100, file='./cities.dat', action='read')
+  read(100,*,iostat=ierr) comment, col%icity_count
+  if (ierr == 0) then
+    allocate(col%city(col%icity_count))
+  else
+    write(*,*)'Error'
+    stop
+  endif
+  !! Koordinaten einlesen
+  i = 1
+  do
+    read(100,*,iostat=ierr) icity_num, col%city(i)%rxcoordinate, &
+                           &col%city(i)%rycoordinate
+    if (ierr == 0) then
+      i = i + 1
+    endif
+    if (ierr < 0 ) exit           !! ierr < 0 -> Dateiende
+    if (i > col%icity_count) exit 
+  enddo
+  close(100)
+!!DEBUGGING
+!  do i = 1, col%icity_count, 1
+!  write(*,'(2ES25.15)')col%city(i)%rxcoordinate, col%city(i)%rycoordinate
+!  enddo
+!!!!!!!!!!!
+
+  !! Initialisieren des "Gen-Pools"
+  pool%ipop_count = num_individuals
+  allocate(pool%ipop(col%icity_count, pool%ipop_count), &
+          &pool%rpop_fitness(pool%ipop_count), &
+          &pool%mut_flags(pool%ipop_count), &
+          &modified_pool%ipop(col%icity_count, pool%ipop_count), &
+          &modified_pool%rpop_fitness(pool%ipop_count), &
+          &modified_pool%mut_flags(pool%ipop_count))
+  pool%ipop = 0
+  pool%rpop_fitness = zero
+  pool%mut_flags = .false.
+  modified_pool%ipop = 0
+  modified_pool%rpop_fitness = zero
+  modified_pool%mut_flags = .false.
+
+  !! Erstellen der Startpopulation
+  call init_pool(pool)
+
+!!!!!!!!!!!!!!!!!!!!!! Krass, dass das klappt o.O !!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  !! Erstellen der Population auf die die M
+  modified_pool = pool
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+
+  do i = 1, gen, 1
+
+    call crossover(modified_pool, col, 1000, mode='standard') 
+!    call crossover(modified_pool, col, 1000, mode='scr') 
+    call mutation(modified_pool, 3.0d-002)
+
+    !! Berechnen der Weglängen für die Individuen des vorherigen Schritts und 
+    !! für die modifizierten Individuen nach Mutation und Crossover
+    call get_path_length(pool, col)
+    call get_path_length(modified_pool, col)
+modified_pool%mut_flags = .false.
+    call selection(pool, modified_pool, rsurv_prob)
+
+    write(*,'(I5,3ES25.15)')i, mean_fitness(pool), minval(pool%rpop_fitness), maxval(pool%rpop_fitness)
+   !! Abbruchkriterium !TODO
+   ! if (abs(minval(pool%rpop_fitness) - mean_fitness(pool)) <= prec) then
+   !   if (abs(maxval(pool%rpop_fitness) - mean_fitness(pool)) <= prec) then
+   !     write(*,'(ES25.15)')minval(pool%rpop_fitness)
+   !     write(*,'(40I3)')pool%ipop(:,1)
+   !     exit
+   !   endif
+   ! endif
+    !! Rücksetzen der Fitness-Arrays und updaten von modified_pool für den 
+    !! nächsten Iterationsschritt
+    pool%rpop_fitness = zero
+    modified_pool%rpop_fitness = zero
+    modified_pool = pool
+
+  enddo
+
+  do i = 1, size(pool%ipop(1,:)), 1
+    write(*,'(50I2)')modified_pool%ipop(:,i)
+  enddo
+
+  !! Freigeben des verwendeten Speichers
+  call apocalypse()
+
+
+contains
+
+  !! Initialisieren der Ausgangspopulation. Dazu wird das Array pop_array 
+  !! zunächst geordnet mit Zahlen von 1 bis pop_sizex gefüllt und anschließend 
+  !! die Reihenfolge der Zahlen pop_sizex-mal zuällig vertauscht. 
+  !!
+  !! pop_array(pop_sizex,pop_sizey) 2D Array Integer*4
+  !! pop_sizex anzahl der zeilen des übergebenen arrays Int*4
+  !! pop_sizey anzahl der spalten des übergebenen arrays Int*4
+  subroutine init_pool(population)
+    type(population_t)  :: population
+    integer             :: i, n_city, n_pop
+    real(idp)           :: rrndm_num
+
+    n_city = size(population%ipop(:,1))
+    n_pop = size(population%ipop(1,:))
+
+    !! Geordnetes Füllen des Arrays
+    do i = 1, n_city, 1
+      population%ipop(i,:) = i
+    enddo
+  
+    !! Reihenfolge der Zahlen zufällig vertauschen (willkürlich n_city-mal) 
+    do i = 1, n_pop, 1
+      call swap_digits(population%ipop(:,i), n_city)
+    enddo
+
+  end subroutine
+
+  !! Analog zum erzeugen, d.h. vertauschen von zwei Zahlen
+  subroutine mutation(population, mut_probability)
+    type(population_t),  intent(inout)  :: population 
+    integer                             :: i, n_pop
+    real(idp)                           :: rrndm_num, mut_probability
+
+    n_pop = size(population%ipop(1,:))
+
+    do i = 1, n_pop, 1
+      rrndm_num = zero
+      !! Wenn rrndm_num =< mut_probability wird die Mutation ausgeführt
+      call random_number(rrndm_num)
+      if (rrndm_num <= mut_probability) then
+
+        call swap_digits(population%ipop(:,i), 1) ! Nur zwei Werte vertauschen.
+        !! Setze Flag das dieses Individuum mutiert wurde
+        population%mut_flags(i) = .true.
+      endif
+    enddo
+
+  end subroutine
+
+  !! Erzeugung von zwei Kindern aus zwei Eltern. Hierzu werden zwei Eltern
+  !! aus dem Pool ausgewählt und Sequenzen beider Teile zu jeweils zwei
+  !! Kindern zusammengesetzt. An welcher Stelle die zu vermischenden Sequenzen
+  !! starten und wo sie enden wird durch generierte Zufallszahlen bestimmt.
+  !!
+  !! population (population_t)
+  !! crossover_count: Crossovers pro Durchlauf (max n_pop / 2)
+
+!!mode = 'standard' oder 'scr'
+!  subroutine crossover(population, crossover_count, mode)
+  subroutine crossover(population, collection, crossover_count, mode)
+    type(population_t),  intent(inout)  :: population
+    type(collection_t),  intent(inout)  :: collection
+    character(len=*)                    :: mode
+    integer,   allocatable              :: crossover_order(:), parents(:,:), &
+                                           & childs(:,:)
+    real(idp), allocatable              :: rcost_matrix(:,:)
+    integer                             :: i, n_city, n_pop, crossover_count
+
+    n_city = size(population%ipop(:,1))
+    n_pop = size(population%ipop(1,:))
+
+    allocate(crossover_order(n_pop), parents(n_city, 2), childs(n_city, 2))
+    crossover_order = 0
+    parents = 0
+    childs = 0
+
+    !! Prüfe ob genug Individuuen für die gewünschte Anzahl an Crossovers 
+    !! vorhanden sind (Mindestens n_pop >= 2*crossover_count)
+    if (n_pop - 2 * crossover_count < 0) then
+      write(*,*)'Number of desired crossovers exceeding number of individuals!'
+      stop
+    elseif (n_pop - 2 * crossover_count == 1) then
+        write(*,*)'Reduce number of crossovers per step by one!'
+    endif
+
+    !! Erstellen der Eltern-Paare. Zwei aufeinander folgende Einträge in 
+    !! crossover_order entsprechen dabei einem Elternpaar.
+    do i = 1, n_pop, 1
+      crossover_order(i) = i 
+    enddo
+    !! Zufälliges Vertauschen der Reihenfolge
+    call swap_digits(crossover_order, 10 * n_pop) 
+
+    !! Wird der Modus 'scr' verwendet: Initialisieren der Kostenmatrix, 
+    !! die die Kosten für jede direkte Verbindung zwischen zwei Knoten enthält.
+    if (mode == 'scr') then    
+      allocate(rcost_matrix(n_city, n_city))
+      rcost_matrix = zero
+ 
+      call init_cost_matrix(rcost_matrix, collection)
+    endif 
+
+    do i = 1, crossover_count, 2
+      parents(:,1) = population%ipop(:, crossover_order(i))
+      parents(:,2) = population%ipop(:, crossover_order(i + 1))
+      
+      if (mode == 'standard') then
+        call standard_crossover(parents, childs)
+      elseif (mode == 'scr') then
+        call sequential_constructive_crossover(collection, rcost_matrix, &
+                                               &parents, childs(:, 1)) 
+      else
+        write(*,'(A)')'Mode not supported!'
+        stop
+      endif
+
+      !! Ersetzen der Eltern mit den neu erzeugten Kindern
+      if (mode == 'standard') then
+        population%ipop(:, crossover_order(i)) = childs(:, 1)
+        population%ipop(:, crossover_order(i + 1)) = childs(:, 2)
+      elseif (mode == 'scr') then
+        population%ipop(:, crossover_order(i)) = childs(:, 1)
+        population%ipop(:, crossover_order(i + 1)) = childs(:, 1)
+      endif
+    enddo
+
+    if (allocated(rcost_matrix)) then
+      deallocate(rcost_matrix)
+    endif
+    
+  end subroutine
+
+  !! Standard Crossover wählt zufällig zwei Position und überträgt die Sequenz
+  !! zwischen diesen beiden Positionen von Elternteil 1 auf Kind 2 und von
+  !! Elternteil 2 auf Kind 1. Die verbleibenden Positionen von Kind 1 werden
+  !! dann mit den Ziffern des Elternteil 1 befüllt die nicht bereits in der
+  !! übertragenen Sequenz enthalten waren (Kind 2 analog)
+  !!
+  !! type(population_t)
+  !! parents: 2D Array parents(n_city, 2) enthält die beiden Elternteile
+  !! childs: 2D Array childs(n_city, 2) enthält die beiden erzeugten Kinder 
+  subroutine standard_crossover(parents, childs)
+    integer    ::  parents(:,:), childs(:,:)
+    integer    :: j, k, l, n_city, ipos(2)
+    real(idp)  :: rrndm_num
+    logical    :: duplicate
+
+    n_city = size(parents(:, 1))
+
+    !! Erzeugen der Kinder aus den gewählten Eltern
+    do
+      call random_number(rrndm_num)
+      ipos(1) = ceiling(n_city * rrndm_num)
+      call random_number(rrndm_num)
+      ipos(2) = ceiling(n_city * rrndm_num)
+      if (ipos(1) /= ipos(2)) exit
+    enddo
+    !! Sortieren der Position, so dass ipos(1) der kleinere Wert ist
+    if (ipos(2) < ipos(1)) then
+      k = ipos(1)
+      ipos(1) = ipos(2)
+      ipos(2) = k
+    endif
+
+    !! Ausgewählten Bereich der Elternteile auf die Kinder übertragen
+    do j = ipos(1), ipos(2), 1
+      childs(j, 2) = parents(j, 1)
+      childs(j, 1) = parents(j, 2)
+    enddo
+
+    !! Verbleibende Plätze mit Städten aus dem jeweils anderen Elternteil 
+    !! füllen. Entspricht eine Zahl des Elternteils einer Zahl des bereits
+    !! geschriebenen Bereichs wird diese übergangen.
+    do l = 1, 2, 1
+      do j = 1, n_city, 1
+        do k = 1, n_city, 1
+          duplicate = .false.
+          duplicate = check_duplicate(childs(:, l), parents(k, l))
+          if (j < ipos(1) .or. j > ipos(2)) then
+            if (duplicate .eqv. .false.) then
+              childs(j, l) = parents(k, l)
+              exit
+            endif
+          endif
+        enddo
+      enddo
+    enddo
+  end subroutine
+
+  !! Sequential constructive crossover erzeugt ein Kind aus zwei Eltern und 
+  !! gewichtet dazu die Wahl der Knoten mit einer Kostenmatrix, die die Kosten
+  !! für jede direkte Verbindung von zwei Knotenpunken enthält. Aus den ersten 
+  !! und zweiten Elternteil wird je eine Verbindung zwischen zwei Knoten erzeugt
+  !! und im Anschluss die mit den geringsten Kosten gewählt und auf das Kind
+  !! übertragen
+  !!
+  !! collection: type(collection_t)
+  !! cost_matrix: 2D matrix die alle Kosten enthält
+  !! parents: 2D Array parents(n_city, 2) enthält die beiden Elternteile
+  !! child: 1D Array child(n_city) das später das erzeugte Kind enthält
+  subroutine sequential_constructive_crossover(collection, rcost_matrix, &
+                                               &parents, child)
+    type(collection_t)       :: collection
+    real(idp)                :: rcost_matrix(:,:)
+    integer                  :: parents(:,:), child(:)
+    integer                  :: node(2), node_pos(2)
+    real(idp)                :: cost_node(2)
+    integer                  :: i, j, n_city
+
+    n_city = collection%icity_count 
+
+    node = 0
+    node_pos = 0
+    child = 0  !! <-- Hieran lags, das es nicht funktioniert hat... ohne child=0 kommt nur blödsinn raus
+    do i = 1, n_city, 1
+      !! Erster Knoten des Kindes entspricht erstem Knoten des 
+      !! ersten Elternteils
+      if (i == 1) then
+        node(1) = parents(i,1)
+        child(i) = node(1)
+    
+      !! Ermitteln der Nachfolgenden Knoten
+      else
+
+        !! Bestimmten der Position des ersten Knotens in parents(:,1) und 
+        !! parents(:,2)
+        node_pos(1) = node_position(parents(:, 1), node(1))
+        node_pos(2) = node_position(parents(:, 2), node(1))
+
+        !! Bestimmen von node(1) aus parents(:, 1)
+        !! Liegt der Knoten nicht am Ende des Strings, prüfen ob Nachfolgeknoten
+        !! Bereits in child enthalten ist. 
+        if (node_pos(1) /= n_city) then
+          if (check_duplicate(child(:), parents(node_pos(1) + 1, 1)) &
+              &.eqv. .false.) then
+            node(1) = parents(node_pos(1) + 1, 1)
+          !! Knoten bereits vorhanden, dann wähle den nächsten Knoten aus
+          !! parents(:, 1) der noch nicht in child(:) enthalten ist.
+          else
+            do j = 1, n_city, 1
+              if (check_duplicate(child(:), parents(j, 1)) .eqv. .false.) then
+                node_pos(1) = j
+                node(1) = parents(j, 1)
+                exit
+              endif
+            enddo
+          endif
+        !! Liegt der Knoten am Ende des Strings, dann wähle den nächsten Knoten
+        !! aus parents(:, 1) der noch nicht in child(:) enthalten ist.
+        elseif (node_pos(1) == n_city) then 
+          do j = 1, n_city, 1
+            if (check_duplicate(child(:), parents(j, 1)) .eqv. .false.) then
+              node_pos(1) = j
+              node(1) = parents(j, 1)
+              exit
+            endif
+          enddo
+        endif
+
+        !! Bestimmen von node(2) aus parents(:, 2) analog zur Bestimmung
+        !! von node(1). 
+        if (node_pos(2) /= n_city) then
+          if (check_duplicate(child(:), parents(node_pos(2) + 1, 2)) &
+              &.eqv. .false.) then
+            node(2) = parents(node_pos(2) + 1, 2)
+          !! Knoten bereits vorhanden, dann wähle den nächsten Knoten aus
+          !! parents(:, 1) der noch nicht in childs(:, 1) enthalten ist.
+          else
+            do j = 1, n_city, 1
+              if (check_duplicate(child(:), parents(j, 2)) .eqv. .false.) then
+                node_pos(2) = j
+                node(2) = parents(j, 2)
+                exit
+              endif
+            enddo
+          endif
+        !! Liegt der Knoten am Ende des Strings, dann wähle den nächsten Knoten
+        !! aus parents(:, 1) der noch nicht in childs(:, 1) enthalten ist.
+        elseif (node_pos(2) == n_city) then 
+          do j = 1, n_city, 1
+            if (check_duplicate(child(:), parents(j, 2)) .eqv. .false.) then
+              node_pos(2) = j
+              node(2) = parents(j, 2)
+              exit
+            endif
+          enddo
+        endif
+  
+        !! Jetzt den besten Nachfolge-Knoten anhand der Kosten-Matrix bestimmen.
+        !! Sind beide Knoten gleich oder besitzen die gleichen Kosten wird 
+        !! willkürlich Node1 als Nachfolger festgelegt. Sonst der mit den 
+        !! niedrigsten Kosten 
+        if (node(1) /= node(2)) then
+          cost_node(1) = rcost_matrix(child(i), node(1))
+          cost_node(2) = rcost_matrix(child(i), node(2))
+          if (cost_node(1) > cost_node(2)) then
+            child(i) = node(2)
+            node(1) = node(2)
+          elseif (cost_node(2) > cost_node(1)) then
+            child(i) = node(1)
+          elseif (cost_node(1) == cost_node(2)) then
+            child(i) = node(1)
+          endif
+          elseif (node(1) == node(2)) then
+            child(i) = node(1)
+        endif  
+      endif
+    enddo
+!! DEBUGGING !!
+!write(*,'(20I3)')parents(:,1)  
+!write(*,'(20I3)')parents(:,2)  
+!write(*,'(20I3)')child(:)
+
+  end subroutine
+
+  !! Initialisieren der Kosten-Matrix. Die Matrix enthält die Kosten (Weglänge)
+  !! Für alle direkten Verbindungen zwischen allen Knoten
+  !! (Im Sinne von Verbindung zwischen Knoten i und Knoten i + j
+  subroutine init_cost_matrix(cost_matrix, collection)
+    real(idp),           intent(inout)  :: cost_matrix(:,:)
+    type(collection_t),  intent(in)     :: collection
+    integer                             :: i, j
+    real(idp)                           :: rxi, rxj, ryi, ryj
+
+    do i = 1, size(cost_matrix(1,:)), 1
+      do j = 1, size(cost_matrix(1,:)), 1
+        rxi = collection%city(i)%rxcoordinate
+        rxj = collection%city(j)%rxcoordinate
+        ryi = collection%city(i)%rycoordinate
+        ryj = collection%city(j)%rycoordinate
+        
+        if (j /= i) then    
+          cost_matrix(i, j) = sqrt((rxi - rxj) * (rxi - rxj) &
+                                  &+(ryi - ryj) * (ryi - ryj))
+        !! Punkt a nach Punkt a ist keine sinnvolle Lösung. Da diese Lösungen 
+        !! nicht berücksichtigt werden sollen werden die Kosten auf "unendlich"
+        !! gesetzt
+        else
+          cost_matrix(i, j) = pos_inf
+        endif
+      enddo
+    enddo
+   
+  end subroutine
+ 
+  !! Berechnen der Wegstrecke (Fitness) für ein Individuum des Pools. Die
+  !! berechnete Weglänge wird dann entsprechend der Position in pop_array(:,i)
+  !! an die zugehörige Position i im  Array fitness(:) geschrieben.
+  !! 
+  !! pop_array(sizex, sizey) 2D Array mit Individuen
+  !! city_data(sizex) 1D Array mit den Koordinaten der Städte
+  !! fitness 1D Array für die fitnesswerte
+  subroutine get_path_length(population, city_collection)
+    type(population_t),  intent(inout)  :: population
+    type(collection_t),  intent(in)     :: city_collection
+    integer                             :: i, j, n_pop, n_city, ipos, iposp1
+    real(idp)                           :: rxn, rxnp1, ryn, rynp1     
+
+    n_city = city_collection%icity_count
+    n_pop = size(population%ipop(1,:))
+   
+    rxn = zero
+    rxnp1 = zero
+    ryn = zero
+    rynp1 = zero
+    population%rpop_fitness = zero
+
+    !! Berechnung der Weglänge (Fitness) des i-ten Individuums
+    do i = 1, n_pop, 1
+      do j = 1, n_city - 1, 1
+        ipos = population%ipop(j,i)
+        iposp1 = population%ipop(j + 1, i)
+        rxn = city_collection%city(ipos)%rxcoordinate
+        rxnp1 = city_collection%city(iposp1)%rxcoordinate
+        ryn = city_collection%city(ipos)%rycoordinate
+        rynp1 = city_collection%city(iposp1)%rycoordinate
+
+        population%rpop_fitness(i) = population%rpop_fitness(i) + sqrt( &
+                                     &(rxn - rxnp1) * (rxn - rxnp1) + &
+                                     &(ryn - rynp1) * (ryn - rynp1))
+      enddo
+!!!! DEBUGGING !!!!!!!!!
+!write(*,*)population%rpop_fitness(i)
+!!!! DEBUGGING !!!!!!!!!
+    enddo
+
+!!!! DEBUGGING !!!!!!!!!
+!write(*,*)'cut'
+!do i = 1, city_collection%icity_count, 1
+!write(*,'(2ES25.15)')city_collection%city(i)%rxcoordinate, city_collection%city(i)%rycoordinate
+!enddo
+!!!! DEBUGGING !!!!!!!!!
+    
+  end subroutine
+
+  !! Wählt Individuen aus modified_population gemäß ihrer Fitness aus und 
+  !! schreibt die Individuen mit der besten Fitness in population. Der Wert
+  !! von survival_prob gibt dabei die Überlebenswahrscheinlichkeit von 
+  !! Indiviuden mit schlechterer Fitness an. Wurde ein Individuum Mutiert 
+  !! wird keine Überlebenswahrscheinlichkeit verwendet (Diese würde hier zu
+  !! starke Fluktuationen in der bereits konvergierten Lösung führen!).
+  !!
+  !! population: Enthält nachher die besten Individuen
+  !! modified_population: Individuen die durch Crossover und Mutationen 
+  !!                      verändert wurden
+  !! survival_prob: Überlebenswahrscheinlichkeit schlechter Individuen
+  subroutine selection(population, modified_population, survival_prob)
+    type(population_t),  intent(inout)  :: population, modified_population
+    real(idp),           intent(in)     :: survival_prob
+    real(idp)                           :: rrndm_num, rfit_pop, rfit_mod
+    integer                             :: i, n_pop
+    logical                             :: mut_flag
+ 
+    n_pop = size(population%ipop(1, :))
+
+    do i = 1, n_pop, 1
+      call random_number(rrndm_num)
+      mut_flag = modified_population%mut_flags(i)
+      rfit_pop = population%rpop_fitness(i)
+      rfit_mod = modified_population%rpop_fitness(i)
+
+      if (mut_flag .eqv. .true.) then !!nur der bessere überlebt
+        if (rfit_pop >= rfit_mod) then
+          population%ipop(:, i) = modified_population%ipop(:, i)
+        endif
+      elseif (mut_flag .eqv. .false.) then
+        if (rrndm_num > survival_prob) then !! schlechterer fliegt
+          if (rfit_pop > rfit_mod) then
+            population%ipop(:, i) = modified_population%ipop(:, i)
+          endif
+        elseif (rrndm_num <= survival_prob) then !! besserer fliegt
+          if (rfit_pop <= rfit_mod) then
+            population%ipop(:, i) = modified_population%ipop(:, i)
+          endif
+        endif
+      endif
+    enddo
+
+    !! Zurücksetzen der Mutation Flags
+    population%mut_flags = .false.
+    modified_population%mut_flags = .false.
+
+  end subroutine
+
+  !! Subroutine zum freigeben des gesamten, verwendeten Speichers
+  subroutine apocalypse()
+
+    deallocate(col%city)
+    deallocate(pool%ipop)
+    deallocate(pool%rpop_fitness)
+    deallocate(pool%mut_flags)
+    deallocate(modified_pool%ipop)
+    deallocate(modified_pool%rpop_fitness)
+    deallocate(modified_pool%mut_flags)
+
+  end subroutine
+ 
+  !! Wählt n_swap mal zwei zufällige Werte aus array(:) aus und vertauscht
+  !! deren Plätze im Array. 
+  subroutine swap_digits(array, n_swap)
+    integer,  intent(inout)  :: array(:)
+    integer,  intent(in)     :: n_swap
+    integer                  :: i, ipos(2), iwork(2), iarr_size
+    real(idp)                :: rrndm_num
+
+    iarr_size = size(array(:))
+    i = 1
+    do
+      call random_number(rrndm_num)
+      ipos(1) = ceiling(iarr_size * rrndm_num)
+      call random_number(rrndm_num)
+      ipos(2) = ceiling(iarr_size * rrndm_num)
+
+      if (i > n_swap) then
+        exit
+      endif
+      if (ipos(1) /= ipos(2)) then
+        iwork(1) = array(ipos(1))
+        iwork(2) = array(ipos(2))
+     
+        !! Tauschen der Werte
+        array(ipos(1)) = iwork(2)
+        array(ipos(2)) = iwork(1)
+
+        i = i + 1
+      endif  
+    enddo
+    
+  end subroutine
+  
+  !! Prüft ob int_value in array(:) bereits enthalten ist
+  function check_duplicate(array, int_value)
+
+    logical               :: check_duplicate 
+    integer,  intent(in)  :: array(:)
+    integer,  intent(in)  :: int_value
+    integer               :: i
+   
+    check_duplicate = .false. 
+    do i = 1, size(array), 1
+      if (array(i) == int_value) then
+        check_duplicate = .true.
+        exit
+      endif
+    enddo
+   
+  end function
+
+  !! Ermittelt die Position eines bestimmten Knotens in array(:)
+  function node_position(array, node)
+
+    integer                  :: node_position
+    integer,  intent(inout)  :: array(:)
+    integer,  intent(in)     :: node
+    integer                  :: i 
+     
+    do i = 1, size(array), 1
+      if (array(i) == node) then
+        node_position = i
+      endif
+    enddo
+
+  end function
+
+  function mean_fitness(population)
+    real(idp)                       :: mean_fitness
+    type(population_t),  intent(in) :: population
+    integer                         :: i
+    real(idp)                       :: fitness_sum
+
+    fitness_sum = zero
+    do i = 1, size(population%rpop_fitness), 1
+      fitness_sum = fitness_sum + population%rpop_fitness(i)
+    enddo
+
+    mean_fitness = fitness_sum / size(population%rpop_fitness)
+
+  end function
+end program

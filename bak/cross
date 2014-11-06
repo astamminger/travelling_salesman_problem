@@ -1,0 +1,57 @@
+!! Standard Crossover wählt zufällig zwei Position und überträgt die Sequenz
+!! zwischen diesen beiden Positionen von Elternteil 1 auf Kind 2 und von
+!! Elternteil 2 auf Kind 1. Die verbleibenden Positionen von Kind 1 werden
+!! dann mit den Ziffern des Elternteil 1 befüllt die nicht bereits in der
+!! übertragenen Sequenz enthalten waren (Kind 2 analog)
+!!
+!! type(population_t)
+!! parents: 2D Array parents(n_city, 2) enthält die beiden Elternteile
+!! childs: 2D Array childs(n_city, 2) enthält die beiden erzeugten Kinder 
+  subroutine standard_crossover(population, parents, childs)
+    integer    ::  parents(:,:), childs(:,:)
+    integer    :: j, k, l, n_city, ipos(2)
+    real(idp)  :: rrndm_num
+    logical    :: duplicate
+
+    n_city = size(parents(:, 1))
+
+    !! Erzeugen der Kinder aus den gewählten Eltern
+    do
+      call random_number(rrndm_num)
+      ipos(1) = ceiling(n_city * rrndm_num)
+      call random_number(rrndm_num)
+      ipos(2) = ceiling(n_city * rrndm_num)
+      if (ipos(1) /= ipos(2)) exit
+    enddo
+    !! Sortieren der Position, so dass ipos(1) der kleinere Wert ist
+    if (ipos(2) < ipos(1)) then
+      k = ipos(1)
+      ipos(1) = ipos(2)
+      ipos(2) = k
+    endif
+
+    !! Ausgewählten Bereich der Elternteile auf die Kinder übertragen
+    do j = ipos(1), ipos(2), 1
+      childs(j, 2) = parents(j, 1)
+      childs(j, 1) = parents(j, 2)
+    enddo
+
+    !! Verbleibende Plätze mit Städten aus dem jeweils anderen Elternteil 
+    !! füllen. Entspricht eine Zahl des Elternteils einer Zahl des bereits
+    !! geschriebenen Bereichs wird diese übergangen.
+    do l = 1, 2, 1
+      do j = 1, n_city, 1
+        do k = 1, n_city, 1
+          duplicate = .false.
+          duplicate = check_duplicate(childs(:, l), parents(k, l))
+          if (j < ipos(1) .or. j > ipos(2)) then
+            if (duplicate == .false.) then
+              childs(j, l) = parents(k, l)
+              exit
+            endif
+          endif
+        enddo
+      enddo
+    enddo
+ 
+end subroutine

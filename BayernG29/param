@@ -1,0 +1,7 @@
+num_individuals = 250
+n_cross = 10
+muprob = 1.0d-002
+gen = 50000
+n_threads = 8
+n_mig = 1
+n_gen_mig = 5000
