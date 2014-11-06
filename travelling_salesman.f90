@@ -8,6 +8,9 @@
 !! random_number() enthalten sind in eine !$CRITICAL Umgebung gesetzt, da
 !! der parallele Aufruf von random_number() durch mehrere Threads anscheinend 
 !! zu einer race condition führt, die das Programm u.U. extrem verlangsamt.
+!
+!
+!
 program travelling_salesman
 
   use datatypes
