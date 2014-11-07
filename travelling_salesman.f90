@@ -3,11 +3,6 @@
 !! "Sequential Constructive Crossover" bzw. durch simple Mutation (Vertauschen
 !! der Gene eines Individuums) erzeugt. Die Selektion ist durch eine
 !! "Rank-based Roulette-Wheel Selection" realisiert.
-!!
-!! Info: Alle Subroutinen, die einen call auf die intrinsische Subroutine 
-!! random_number() enthalten sind in eine !$CRITICAL Umgebung gesetzt, da
-!! der parallele Aufruf von random_number() durch mehrere Threads anscheinend 
-!! zu einer race condition führt, die das Programm u.U. extrem verlangsamt.
 program travelling_salesman
 
   use datatypes
